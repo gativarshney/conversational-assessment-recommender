@@ -172,7 +172,17 @@ class RecommendationAgent:
                 
                 # 5. Parse and return result
                 res_dict = json.loads(response.text)
-                logger.info(f"Agent response generated. Recommendations count: {len(res_dict.get('recommendations', []))}")
+                
+                # Defensively validate and normalize fields to prevent TypeError or schema validation failures
+                recs = res_dict.get("recommendations")
+                if not isinstance(recs, list):
+                    recs = []
+                    res_dict["recommendations"] = []
+                    
+                if "end_of_conversation" not in res_dict or res_dict["end_of_conversation"] is None:
+                    res_dict["end_of_conversation"] = False
+                    
+                logger.info(f"Agent response generated. Recommendations count: {len(recs)}")
                 return res_dict
                 
             except Exception as e:
