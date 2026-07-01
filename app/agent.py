@@ -54,10 +54,10 @@ class RecommendationAgent:
                 "- Recommendations MUST be empty when clarifying, comparing, or refusing."
             )
             self.model = genai.GenerativeModel(
-                model_name="gemini-1.5-flash",
+                model_name="gemini-2.5-flash",
                 system_instruction=system_instruction
             )
-            logger.info("Generative Model 'gemini-1.5-flash' initialized successfully.")
+            logger.info("Generative Model 'gemini-2.5-flash' initialized successfully.")
         else:
             self.model = None
             logger.warning("GEMINI_API_KEY is missing. Agent will operate in MOCK/FALLBACK mode.")
@@ -154,28 +154,41 @@ class RecommendationAgent:
             f"Analyze the history and decide the next response. Output a JSON object matching the required schema."
         )
 
-        try:
-            # 4. Generate structured content via Gemini
-            logger.info("Requesting structured response from Gemini API...")
-            response = self.model.generate_content(
-                prompt,
-                generation_config=genai.GenerationConfig(
-                    response_mime_type="application/json",
-                    response_schema=LLMAgentResponse,
-                    temperature=0.0 # Low temperature for high precision and zero hallucinations
+        max_retries = 5
+        backoff_in_seconds = 2
+        
+        for attempt in range(max_retries):
+            try:
+                # 4. Generate structured content via Gemini
+                logger.info("Requesting structured response from Gemini API...")
+                response = self.model.generate_content(
+                    prompt,
+                    generation_config=genai.GenerationConfig(
+                        response_mime_type="application/json",
+                        response_schema=LLMAgentResponse,
+                        temperature=0.0 # Low temperature for high precision and zero hallucinations
+                    )
                 )
-            )
-            
-            # 5. Parse and return result
-            res_dict = json.loads(response.text)
-            logger.info(f"Agent response generated. Recommendations count: {len(res_dict.get('recommendations', []))}")
-            return res_dict
-            
-        except Exception as e:
-            logger.error(f"Gemini API invocation failed: {e}", exc_info=True)
-            # Safe runtime fallback if API fails
-            return {
-                "reply": "I encountered an error while processing your request. Please try again.",
-                "recommendations": [],
-                "end_of_conversation": False
-            }
+                
+                # 5. Parse and return result
+                res_dict = json.loads(response.text)
+                logger.info(f"Agent response generated. Recommendations count: {len(res_dict.get('recommendations', []))}")
+                return res_dict
+                
+            except Exception as e:
+                err_str = str(e).lower()
+                is_rate_limit = "429" in err_str or "quota" in err_str or "exhausted" in err_str
+                
+                if is_rate_limit and attempt < max_retries - 1:
+                    sleep_time = backoff_in_seconds * (2 ** attempt)
+                    logger.warning(f"Gemini generation API rate limit hit (429). Retrying in {sleep_time}s... (Attempt {attempt + 1}/{max_retries})")
+                    import time
+                    time.sleep(sleep_time)
+                else:
+                    logger.exception("Gemini API invocation failed during process_conversation")
+                    # Safe runtime fallback if API fails
+                    return {
+                        "reply": "I encountered an error while processing your request. Please try again.",
+                        "recommendations": [],
+                        "end_of_conversation": False
+                    }
